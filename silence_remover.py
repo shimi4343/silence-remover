@@ -1,9 +1,11 @@
 import os
 import time
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import librosa
 import soundfile as sf
-from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -231,8 +233,135 @@ def watch_voice_file(watch_dir="."):
         observer.stop()
         print(f"\n[{time.strftime('%H:%M:%S')}] 監視を終了しました")
         print("=" * 50)
-    
+
     observer.join()
+
+
+def create_web_app():
+    """シンプルなFlaskアプリを生成"""
+    from flask import Flask, request, send_file, render_template_string
+    from werkzeug.utils import secure_filename
+
+    app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB 上限
+
+    page_template = """<!doctype html>
+    <html lang=\"ja\">
+    <head>
+        <meta charset=\"utf-8\">
+        <title>Silence Remover</title>
+        <style>
+            body { font-family: sans-serif; background: #f2f2f2; margin: 0; padding: 2rem; }
+            main { max-width: 640px; margin: 0 auto; background: #fff; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 0 16px rgba(0,0,0,0.1); }
+            h1 { margin-top: 0; }
+            form { display: grid; gap: 1rem; }
+            label { display: flex; flex-direction: column; font-weight: bold; }
+            input[type=\"number\"] { padding: 0.5rem; }
+            input[type=\"file\"] { padding: 0.5rem 0; }
+            button { padding: 0.75rem 1rem; font-size: 1rem; cursor: pointer; }
+            .error { color: #d32f2f; font-weight: bold; }
+            .hint { color: #666; font-size: 0.9rem; font-weight: normal; }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>Silence Remover</h1>
+            <p>音声ファイルをアップロードすると、0.1秒以上の無音が短縮されたファイルをダウンロードできます。</p>
+            {% if error %}
+                <p class=\"error\">{{ error }}</p>
+            {% endif %}
+            <form method=\"post\" enctype=\"multipart/form-data\">
+                <label>音声ファイル
+                    <input type=\"file\" name=\"audio\" accept=\"audio/*\" required>
+                </label>
+                <label>無音判定閾値 (dB)<span class=\"hint\">既定値: -40</span>
+                    <input type=\"number\" name=\"silence_threshold\" value=\"{{ silence_threshold }}\" step=\"1\" min=\"-120\" max=\"0\">
+                </label>
+                <label>短縮対象の最小無音時間 (秒)<span class=\"hint\">既定値: 0.1</span>
+                    <input type=\"number\" name=\"min_silence_duration\" value=\"{{ min_silence_duration }}\" step=\"0.05\" min=\"0\">
+                </label>
+                <label>短縮後の無音時間 (秒)<span class=\"hint\">既定値: 0.1</span>
+                    <input type=\"number\" name=\"target_silence_duration\" value=\"{{ target_silence_duration }}\" step=\"0.05\" min=\"0\">
+                </label>
+                <button type=\"submit\">処理してダウンロード</button>
+            </form>
+            <p class=\"hint\">CLI や監視機能は <code>python silence_remover.py</code> / <code>python silence_remover.py watch</code> で利用できます。</p>
+        </main>
+    </body>
+    </html>"""
+
+    @app.route("/", methods=["GET", "POST"])
+    def index():
+        default_params = {
+            "silence_threshold": -40,
+            "min_silence_duration": 0.1,
+            "target_silence_duration": 0.1,
+        }
+
+        if request.method == "GET":
+            return render_template_string(page_template, error=None, **default_params)
+
+        params = {
+            "silence_threshold": request.form.get("silence_threshold", default_params["silence_threshold"]),
+            "min_silence_duration": request.form.get("min_silence_duration", default_params["min_silence_duration"]),
+            "target_silence_duration": request.form.get("target_silence_duration", default_params["target_silence_duration"]),
+        }
+
+        error = None
+        uploaded_file = request.files.get("audio")
+        if uploaded_file is None or uploaded_file.filename == "":
+            error = "音声ファイルを選択してください"
+            return render_template_string(page_template, error=error, **params)
+
+        try:
+            silence_threshold = float(params["silence_threshold"] or default_params["silence_threshold"])
+            min_silence_duration = float(params["min_silence_duration"] or default_params["min_silence_duration"])
+            target_silence_duration = float(params["target_silence_duration"] or default_params["target_silence_duration"])
+        except ValueError:
+            error = "数値パラメータが正しくありません"
+            return render_template_string(page_template, error=error, **params)
+
+        params.update(
+            {
+                "silence_threshold": silence_threshold,
+                "min_silence_duration": min_silence_duration,
+                "target_silence_duration": target_silence_duration,
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir_path = Path(tmp_dir)
+            original_name = secure_filename(uploaded_file.filename or "input.wav")
+            if not original_name:
+                original_name = "input.wav"
+
+            input_path = tmp_dir_path / original_name
+            uploaded_file.save(input_path)
+
+            output_path = input_path.with_name(f"{input_path.stem}_processed.wav")
+
+            try:
+                detect_and_remove_silence(
+                    str(input_path),
+                    str(output_path),
+                    silence_threshold=silence_threshold,
+                    min_silence_duration=min_silence_duration,
+                    target_silence_duration=target_silence_duration,
+                )
+            except Exception as exc:
+                error = f"処理中にエラーが発生しました: {exc}"
+                return render_template_string(page_template, error=error, **params)
+
+            download_name = f"{Path(uploaded_file.filename).stem or 'audio'}_processed.wav"
+            return send_file(output_path, as_attachment=True, download_name=download_name)
+
+    return app
+
+
+def run_web_app(host="127.0.0.1", port=5000):
+    """Flask開発サーバーを起動"""
+    app = create_web_app()
+    app.run(host=host, port=port, debug=False)
 
 if __name__ == "__main__":
     import sys
@@ -240,10 +369,28 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "watch":
         # 監視モード
         watch_voice_file(".")
+    elif len(sys.argv) > 1 and sys.argv[1] == "web":
+        # Webアプリモード
+        print("Webインターフェースを起動します。ブラウザで http://127.0.0.1:5000 を開いてください。")
+
+        host = "127.0.0.1"
+        port = 5000
+
+        if len(sys.argv) > 2:
+            host = sys.argv[2]
+
+        if len(sys.argv) > 3:
+            try:
+                port = int(sys.argv[3])
+            except ValueError:
+                print("ポート番号が正しくありません。デフォルトの5000番を使用します。")
+                port = 5000
+
+        run_web_app(host=host, port=port)
     else:
         # 通常の一回だけの処理
         current_dir = "."
-        
+
         print("音声ファイルの無音削除処理を開始します...")
         print(f"入力フォルダ: {current_dir}")
         print(f"出力先: 元ファイルと同じフォルダ（_processed.wavとして保存）")
