@@ -4,10 +4,18 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-import librosa
 import soundfile as sf
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+def load_audio_mono(audio_path):
+    """音声ファイルを読み込みモノラル化"""
+    audio, sr = sf.read(audio_path)
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+    audio = audio.astype(np.float32, copy=False)
+    return audio, sr
+
 
 def detect_and_remove_silence(audio_path, output_path, silence_threshold=-40, min_silence_duration=0.1, target_silence_duration=0.1):
     """
@@ -22,7 +30,7 @@ def detect_and_remove_silence(audio_path, output_path, silence_threshold=-40, mi
     """
     try:
         # 音声ファイルを読み込み
-        audio, sr = librosa.load(audio_path, sr=None)
+        audio, sr = load_audio_mono(audio_path)
         
         print(f"元ファイル: {len(audio)/sr:.2f}秒, サンプルレート: {sr}Hz")
         
@@ -43,13 +51,18 @@ def process_audio_simple(audio, sr, silence_threshold=-40, min_silence_duration=
     シンプルな無音検出と削除
     """
     # RMS エネルギーを計算（フレームサイズを大きくして安定化）
-    frame_length = int(0.025 * sr)  # 25ms フレーム
-    hop_length = int(0.010 * sr)    # 10ms ホップ
-    
-    rms = librosa.feature.rms(y=audio, frame_length=frame_length, hop_length=hop_length)[0]
-    
-    # dBに変換
-    rms_db = librosa.amplitude_to_db(rms, ref=np.max)
+    frame_length = max(int(0.025 * sr), 1)  # 25ms フレーム
+    hop_length = max(int(0.010 * sr), 1)    # 10ms ホップ
+
+    if len(audio) < frame_length:
+        rms = np.array([np.sqrt(np.mean(audio ** 2) + 1e-12)], dtype=np.float32)
+    else:
+        kernel = np.ones(frame_length, dtype=np.float32) / frame_length
+        power = np.convolve(audio ** 2, kernel, mode="valid")
+        rms = np.sqrt(power[::hop_length] + 1e-12)
+
+    ref = np.max(rms) if np.max(rms) > 0 else 1.0
+    rms_db = 20 * np.log10(np.maximum(rms, 1e-10) / ref)
     
     # 無音フレームを検出
     silent_frames = rms_db < silence_threshold
