@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: silence-remover
+    runtime: python
+    plan: free
+    buildCommand: "./render-build.sh"
+    startCommand: "gunicorn silence_remover:app --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.4"

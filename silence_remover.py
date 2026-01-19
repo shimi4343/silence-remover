@@ -303,6 +303,10 @@ def create_web_app():
     </body>
     </html>"""
 
+    @app.route("/health")
+    def health():
+        return {"status": "ok"}
+
     @app.route("/", methods=["GET", "POST"])
     def index():
         default_params = {
@@ -371,9 +375,13 @@ def create_web_app():
     return app
 
 
+# モジュールレベルでappを公開（Gunicorn用）
+app = create_web_app()
+
+
 def run_web_app(host="127.0.0.1", port=5000):
     """Flask開発サーバーを起動"""
-    app = create_web_app()
+    port = int(os.environ.get("PORT", port))
     app.run(host=host, port=port, debug=False)
 
 if __name__ == "__main__":
