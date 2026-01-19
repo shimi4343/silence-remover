@@ -279,7 +279,7 @@ def create_web_app():
     <body>
         <main>
             <h1>Silence Remover</h1>
-            <p>音声ファイルをアップロードすると、0.1秒以上の無音が短縮されたファイルをダウンロードできます。</p>
+            <p>音声ファイルをアップロードすると、無音が短縮されたファイルをダウンロードできます。</p>
             {% if error %}
                 <p class=\"error\">{{ error }}</p>
             {% endif %}
@@ -298,7 +298,6 @@ def create_web_app():
                 </label>
                 <button type=\"submit\">処理してダウンロード</button>
             </form>
-            <p class=\"hint\">CLI や監視機能は <code>python silence_remover.py</code> / <code>python silence_remover.py watch</code> で利用できます。</p>
         </main>
     </body>
     </html>"""
